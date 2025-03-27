@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.interpolate import interp2d
+# from scipy.interpolate import interp2d
 # import jax.numpy as jnp
 # import jax.random as random
 
@@ -118,7 +118,7 @@ class MyPayoff:
         
         print("Options")
         option_prices = [i / n_iters for i in option_prices]
-        print(f"\tUniscounted options: {option_prices}")
+        print(f"\tUndiscounted options: {option_prices}")
         option_prices = [i * 1/(1+self.r_f_d)**N for i in option_prices]
         
         print(f"\tDiscounted options: {option_prices}")
