@@ -1,17 +1,40 @@
 import numpy as np
+from scipy.interpolate import interp2d
 # import jax.numpy as jnp
 # import jax.random as random
 
+from xbbg import blp
+
+def fetch_vol_surface(ticker):
+    """
+    Fetches the implied volatility surface for a given Bloomberg ticker.
+    """
+    strikes = np.arange(80, 120, 5)  # Define strike prices dynamically if needed
+    times = np.array([0.1, 0.5, 1.0, 2.0])  # Maturities in years
+    vols = np.zeros((len(strikes), len(times)))
+
+    for i, strike in enumerate(strikes):
+        for j, time in enumerate(times):
+            vol_data = blp.bdp(f"{ticker} {strike} {int(time*365)}", "IVOL_MID")  # Bloomberg implied vol
+            vols[i, j] = vol_data.iloc[0, 0] if not vol_data.empty else np.nan  # Handle missing data
+
+    return create_local_vol_surface(strikes, times, vols)
+    
+# Example of interpolating a local volatility surface from market data
+def create_local_vol_surface(strikes, times, vols):
+    return interp2d(strikes, times, vols, kind='cubic')
+
 class MyPayoff:
-    def __init__(self,mu,sigma,cov_matrix,r_f):
+    def __init__(self,mu,sigma,cov_matrix,r_f,vol_surface=None):
         self.S0 = np.ones(np.shape(sigma)) ## don't care about S0 since we normalise everything, this is a relic
         self.mu = mu
         self.sigma = sigma
         self.cov_matrix = cov_matrix
         self.r_f = r_f
         self.r_f_d = (1 + self.r_f) ** (1/252) - 1
+        self.vol_surface = vol_surface
 
-    def _simulate_paths(self,T,N,n_iters):
+    def _simulate_paths_gbm(self,T,N,n_iters):
         """
         GBM simulation
         output shape: num_paths, num_iters, num_udls
@@ -31,6 +54,28 @@ class MyPayoff:
             for t in range(1, N):
                 
                 newPrice = newPrice * p1 * np.exp(p2[t])
+                paths[i][t] = newPrice / self.S0
+        
+        self.paths = paths
+
+    def _simulate_local_vol_paths(self, T, N, n_iters):
+        """
+        Local volatility model simulation
+        output shape: num_paths, num_iters, num_udls
+        """
+        dt = T / N
+        num_assets = len(self.S0)
+    
+        paths = np.zeros([n_iters, N, num_assets])
+        for i in range(n_iters):
+            newPrice = self.S0     
+            Z = np.random.multivariate_normal(np.zeros(num_assets), self.cov_matrix, N)
+
+            for t in range(1, N):
+                local_vol = self.vol_surface(newPrice, t * dt)  # Extract local vol
+                drift = self.mu - 0.5 * local_vol ** 2
+                diffusion = local_vol * np.sqrt(dt) * Z[t]
+                newPrice = newPrice * np.exp(drift * dt + diffusion)
                 paths[i][t] = newPrice / self.S0
         
         self.paths = paths
@@ -272,7 +317,7 @@ if __name__ == "__main__":
 
 
     a = MyPayoff(mu,sigma,cov_matrix,r_f)
-    a._simulate_paths(T,N,n_iters)
+    a._simulate_paths_gbm(T,N,n_iters)
     a._calculate_product_price(
         observations = observations,
         couponTrue = couponTrue,
